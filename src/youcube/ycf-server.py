@@ -54,6 +54,7 @@ from yc_utils import (
     get_audio_name,
     get_video_name,
     is_save,
+    load_config,
 )
 
 VERSION = "0.1.1"  # https://commandcracker.github.io/YouCube/
@@ -347,9 +348,27 @@ def assert_resp(
     return None
 
 
+def resolve_config_value(value, env_key: str) -> Optional[str]:
+    if value is None:
+        return getenv(env_key)
+    if isinstance(value, str) and not value.strip():
+        return getenv(env_key)
+    return value
+
+
 # pylint: disable=duplicate-code
-spotify_client_id = getenv("SPOTIPY_CLIENT_ID")
-spotify_client_secret = getenv("SPOTIPY_CLIENT_SECRET")
+config = load_config()
+spotify_config = config.get("spotify") if isinstance(config.get("spotify"), dict) else {}
+spotify_client_id = resolve_config_value(
+    spotify_config.get("client_id"), "SPOTIPY_CLIENT_ID"
+)
+spotify_client_secret = resolve_config_value(
+    spotify_config.get("client_secret"), "SPOTIPY_CLIENT_SECRET"
+)
+spotify_market = spotify_config.get("market") if spotify_config else None
+if isinstance(spotify_market, str) and not spotify_market.strip():
+    spotify_market = None
+spotify_market = spotify_market or "NL"
 # pylint: disable-next=invalid-name
 spotipy = None
 
@@ -365,7 +384,7 @@ if spotify_client_id and spotify_client_secret:
 # pylint: disable-next=invalid-name
 spotify_url_processor = None
 if spotipy:
-    spotify_url_processor = SpotifyURLProcessor(spotipy)
+    spotify_url_processor = SpotifyURLProcessor(spotipy, spotify_market=spotify_market)
 
 # pylint: enable=duplicate-code
 

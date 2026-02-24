@@ -8,10 +8,8 @@ Download Functionality of YC
 # Built-in modules
 from asyncio import run_coroutine_threadsafe
 from hashlib import sha1
-import json
-from json import JSONDecodeError
 from os import getenv, listdir
-from os.path import abspath, dirname, exists, join
+from os.path import abspath, dirname, join
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -28,6 +26,7 @@ from yc_utils import (
     get_video_name,
     is_audio_already_downloaded,
     is_video_already_downloaded,
+    load_config,
     remove_ansi_escape_codes,
     remove_whitespace,
 )
@@ -50,8 +49,6 @@ from yt_dlp import YoutubeDL
 # pylint: disable=too-many-branches
 
 DATA_FOLDER = join(dirname(abspath(__file__)), "data")
-ROOT_DIR = dirname(dirname(dirname(abspath(__file__))))
-CONFIG_PATH = join(ROOT_DIR, "config.json")
 FFMPEG_PATH = getenv("FFMPEG_PATH", "ffmpeg")
 SANJUUNI_PATH = getenv("SANJUUNI_PATH", "sanjuuni")
 DISABLE_OPENCL = bool(getenv("DISABLE_OPENCL"))
@@ -95,22 +92,6 @@ def is_direct_audio_stream_info(info: dict) -> bool:
     if info.get("acodec") == "none":
         return False
     return info.get("duration") in (None, 0)
-
-
-def load_config() -> Dict[str, Any]:
-    """Loads optional config.json settings."""
-    if not exists(CONFIG_PATH):
-        return {}
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    except (OSError, JSONDecodeError) as exc:
-        logger.warning("Failed to read config.json: %s", exc)
-        return {}
-    if not isinstance(data, dict):
-        logger.warning("config.json must be a JSON object")
-        return {}
-    return data
 
 
 def live_stream_id_from_url(url: str) -> str:
