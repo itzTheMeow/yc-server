@@ -140,13 +140,25 @@ logger = setup_logging()
 # TODO: change sanic logging format
 
 
-async def get_vid(vid_file: str, tracker: int) -> List[str]:
-    """Returns given line of 32vid file"""
+async def get_vid(vid_file: str, tracker: int, max_bytes: int) -> List[str]:
+    """Returns up to max_bytes of 32vid lines starting at tracker."""
     async with await open_async(file=vid_file, mode="r", encoding="utf-8") as file:
         await file.seek(tracker)
         lines = []
+        total = 0
         for _unused in range(FRAMES_AT_ONCE):
-            lines.append((await file.readline())[:-1])  # remove \n
+            line = (await file.readline())[:-1]  # remove \n
+            if line == "":
+                lines.append("")
+                break
+            line_len = len(line)
+            if total and total + line_len > max_bytes:
+                break
+            if total == 0 and line_len > max_bytes:
+                lines.append(line)
+                break
+            lines.append(line)
+            total += line_len
 
     return lines
 
@@ -156,6 +168,22 @@ async def getchunk(media_file: str, chunkindex: int) -> bytes:
     async with await open_async(file=media_file, mode="rb") as file:
         await file.seek(chunkindex * CHUNKS_AT_ONCE)
         return await file.read(CHUNKS_AT_ONCE)
+
+
+def _remove_live_files(entry: dict) -> None:
+    file_paths = []
+    if entry.get("file_path"):
+        file_paths.append(entry.get("file_path"))
+    if entry.get("audio_file_path"):
+        file_paths.append(entry.get("audio_file_path"))
+    if entry.get("video_file_path"):
+        file_paths.append(entry.get("video_file_path"))
+    for path in {p for p in file_paths if p}:
+        if exists(path):
+            try:
+                remove(path)
+            except PermissionError:
+                logger.warning("Failed to remove live stream file: %s", path)
 
 
 def start_live_audio_stream(
@@ -170,18 +198,30 @@ def start_live_audio_stream(
     """Starts a live audio stream and writes dfpwm output to disk."""
     file_name = get_audio_name(media_id)
     file_path = join(DATA_FOLDER, file_name)
-    stop_event = Event()
-    entry = {
-        "media_id": media_id,
-        "clients": {client_id},
-        "file_name": file_name,
-        "file_path": file_path,
-        "last_used": datetime.now(),
-        "stop_event": stop_event,
-        "ended": False,
-        "delete_on_end": False,
-        "start_time": monotonic(),
-    }
+    with live_streams_lock:
+        entry = live_streams.get(media_id)
+        if not entry:
+            entry = {
+                "media_id": media_id,
+                "clients": {client_id},
+                "last_used": datetime.now(),
+                "stop_event": Event(),
+                "ended": False,
+                "delete_on_end": False,
+                "start_time": monotonic(),
+            }
+            live_streams[media_id] = entry
+        else:
+            entry.setdefault("clients", set()).add(client_id)
+            entry["last_used"] = datetime.now()
+            entry.setdefault("stop_event", Event())
+            entry.setdefault("start_time", monotonic())
+
+        entry["file_name"] = file_name
+        entry["file_path"] = file_path
+        entry["audio_file_path"] = file_path
+
+    stop_event = entry["stop_event"]
 
     create_data_folder_if_not_present()
 
@@ -246,21 +286,15 @@ def start_live_audio_stream(
             loop,
         )
 
-        if delete_on_end and exists(file_path):
-            try:
-                remove(file_path)
-            except PermissionError:
-                logger.warning("Failed to remove live stream file: %s", file_path)
+        if delete_on_end:
+            _remove_live_files(entry)
 
         with live_streams_lock:
             if delete_on_end:
                 live_streams.pop(media_id, None)
 
     thread = Thread(target=run, daemon=True)
-    entry["thread"] = thread
-
-    with live_streams_lock:
-        live_streams[media_id] = entry
+    entry["audio_thread"] = thread
 
     thread.start()
 
@@ -317,12 +351,7 @@ def live_stream_cleaner(live_streams: dict, live_streams_lock: Lock):
                 continue
 
             entry.get("stop_event").set()
-            file_path = entry.get("file_path")
-            if file_path and exists(file_path):
-                try:
-                    remove(file_path)
-                except PermissionError:
-                    logger.warning("Failed to remove live stream file: %s", file_path)
+            _remove_live_files(entry)
 
             with live_streams_lock:
                 live_streams.pop(media_id, None)
@@ -422,18 +451,19 @@ class Actions:
             out["id"] = media_id
             live_info["media_id"] = media_id
 
-            start_live_audio_stream(
-                live_info.get("source_url"),
-                media_id,
-                resp,
-                loop,
-                live_streams,
-                live_streams_lock,
-                id(resp),
-            )
-            await resp.send(
-                dumps({"action": "status", "message": "Buffering live stream ..."})
-            )
+            audio_url = live_info.get("audio_url") or live_info.get("source_url")
+            if audio_url:
+                start_live_audio_stream(
+                    audio_url,
+                    media_id,
+                    resp,
+                    loop,
+                    live_streams,
+                    live_streams_lock,
+                    id(resp),
+                )
+
+            await resp.send(dumps({"action": "status", "message": "Buffering live stream ..."}))
             return out
 
         for file in files:
@@ -467,7 +497,7 @@ class Actions:
                         live_entry.setdefault("clients", set()).add(id(ws))
                         live_entry["last_used"] = datetime.now()
 
-            if live_entry:
+            if live_entry and live_entry.get("audio_file_path"):
                 if chunkindex == 0 and not live_entry.get("buffering_notified"):
                     live_entry["buffering_notified"] = True
                     await ws.send(
@@ -499,7 +529,7 @@ class Actions:
         return {"action": "error", "message": "You dare not use special Characters"}
 
     @staticmethod
-    async def get_vid(message: dict, _unused, request: Request):
+    async def get_vid(message: dict, ws: Websocket, request: Request):
         # get "line"
         tracker = message.get("tracker")
         if error := assert_resp("tracker", tracker, int):
@@ -527,9 +557,20 @@ class Actions:
             file_name = get_video_name(message.get("id"), width, height)
             file = join(DATA_FOLDER, file_name)
 
+            if not exists(file):
+                if media_id.startswith("live-"):
+                    return {
+                        "action": "error",
+                        "message": "Live video is not supported.",
+                    }
+                return {"action": "error", "message": "Video not found"}
+
             request.app.shared_ctx.data[file_name] = datetime.now()
 
-            return {"action": "vid", "lines": await get_vid(file, tracker)}
+            return {
+                "action": "vid",
+                "lines": await get_vid(file, tracker, MAX_WS_PAYLOAD_BYTES),
+            }
 
         return {"action": "error", "message": "You dare not use special Characters"}
 
@@ -609,12 +650,7 @@ def stop_live_streams_for_client(app: Sanic, client_id: int) -> None:
             if stop_event:
                 stop_event.set()
             if entry.get("ended"):
-                file_path = entry.get("file_path")
-                if file_path and exists(file_path):
-                    try:
-                        remove(file_path)
-                    except PermissionError:
-                        logger.warning("Failed to remove live stream file: %s", file_path)
+                _remove_live_files(entry)
                 with live_streams_lock:
                     live_streams.pop(entry.get("media_id"), None)
 
@@ -632,6 +668,7 @@ LIVE_STREAM_CLEANUP_INTERVAL = int(getenv("LIVE_STREAM_CLEANUP_INTERVAL", "30"))
 LIVE_STREAM_IDLE_TIMEOUT = int(getenv("LIVE_STREAM_IDLE_TIMEOUT", "300"))
 LIVE_STREAM_POLL_INTERVAL = float(getenv("LIVE_STREAM_POLL_INTERVAL", "0.25"))
 LIVE_STREAM_READ_TIMEOUT = float(getenv("LIVE_STREAM_READ_TIMEOUT", "60"))
+MAX_WS_PAYLOAD_BYTES = int(getenv("MAX_WS_PAYLOAD_BYTES", "60000"))
 
 
 def data_cache_cleaner(data: dict):
@@ -703,7 +740,11 @@ async def stream_32vid(
     """WIP HTTP mode"""
     return raw(
         "\n".join(
-            await get_vid(join(DATA_FOLDER, get_video_name(media_id, width, height)), tracker)
+            await get_vid(
+                join(DATA_FOLDER, get_video_name(media_id, width, height)),
+                tracker,
+                MAX_WS_PAYLOAD_BYTES,
+            )
         )
     )
 

@@ -11,6 +11,7 @@ from hashlib import sha1
 from os import getenv, listdir
 from os.path import abspath, dirname, join
 from tempfile import TemporaryDirectory
+from time import time
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -60,9 +61,8 @@ DIRECT_AUDIO_EXTENSIONS = (
     ".opus",
     ".flac",
     ".wav",
-    ".m3u",
-    ".m3u8",
 )
+LIVE_VIDEO_BUFFER_SECONDS = int(getenv("LIVE_VIDEO_BUFFER_SECONDS", "30"))
 
 
 def is_direct_audio_stream_url(url: str) -> bool:
@@ -118,6 +118,28 @@ def pick_audio_url(info: dict) -> Optional[str]:
         key=lambda fmt: (fmt.get("abr") or 0, fmt.get("tbr") or 0), reverse=True
     )
     return audio_formats[0].get("url")
+
+
+def pick_video_url(info: dict) -> Optional[str]:
+    """Selects a direct video URL from a yt-dlp info dict."""
+    if info.get("url") and info.get("vcodec") and info.get("vcodec") != "none":
+        return info.get("url")
+
+    formats = info.get("formats") or []
+    video_formats = [
+        fmt for fmt in formats if fmt.get("vcodec") and fmt.get("vcodec") != "none"
+    ]
+    if not video_formats:
+        return None
+    video_formats.sort(
+        key=lambda fmt: (
+            fmt.get("height") or 0,
+            fmt.get("tbr") or 0,
+            fmt.get("vbr") or 0,
+        ),
+        reverse=True,
+    )
+    return video_formats[0].get("url")
 
 
 def download_video(
@@ -211,6 +233,85 @@ def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
         )
 
 
+def buffer_live_video(temp_dir: str, source_url: str, resp: Websocket, loop) -> bool:
+    """Buffers a short segment of live video to a temp file for conversion."""
+    run_coroutine_threadsafe(
+        resp.send(
+            dumps(
+                {
+                    "action": "status",
+                    "message": f"Buffering live video ({LIVE_VIDEO_BUFFER_SECONDS}s) ...",
+                }
+            )
+        ),
+        loop,
+    )
+
+    out_file = join(temp_dir, "live_capture.mp4")
+
+    if NO_COLOR:
+        prefix = "[FFmpeg]"
+    else:
+        prefix = f"{Foreground.BRIGHT_GREEN}[FFmpeg]{RESET} "
+
+    def handler(line):
+        logger.debug("%s%s", prefix, line)
+
+    returncode = run_with_live_output(
+        [
+            FFMPEG_PATH,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-analyzeduration",
+            "0",
+            "-probesize",
+            "32768",
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "5",
+            "-i",
+            source_url,
+            "-t",
+            str(LIVE_VIDEO_BUFFER_SECONDS),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            out_file,
+        ],
+        handler,
+    )
+
+    if returncode != 0:
+        logger.warning("FFmpeg live buffer exited with %s", returncode)
+        run_coroutine_threadsafe(
+            resp.send(
+                dumps({"action": "error", "message": "Faild to buffer live video!"})
+            ),
+            loop,
+        )
+        return False
+    return True
+
+
 def download(
         url: str,
         resp: Websocket,
@@ -229,24 +330,26 @@ def download(
     if width and height:
         width, height = cap_width_and_height(width, height)
 
+    direct_stream_url = None
     if is_direct_audio_stream_url(url):
         if is_video:
+            direct_stream_url = url
+        else:
+            media_id = live_stream_id_from_url(url)
+            create_data_folder_if_not_present()
+            out = {
+                "action": "media",
+                "id": media_id,
+                "title": url,
+                "like_count": None,
+                "view_count": None,
+                "is_live": True,
+            }
             return (
-                {"action": "error", "message": "Livestream video is not supported"},
-                [],
-                None,
+                out,
+                [get_audio_name(media_id)],
+                {"source_url": url, "media_id": media_id},
             )
-        media_id = live_stream_id_from_url(url)
-        create_data_folder_if_not_present()
-        out = {
-            "action": "media",
-            "id": media_id,
-            "title": url,
-            "like_count": None,
-            "view_count": None,
-            "is_live": True,
-        }
-        return out, [get_audio_name(media_id)], {"source_url": url, "media_id": media_id}
 
     def my_hook(info):
         """https://github.com/yt-dlp/yt-dlp#adding-logger-and-progress-hook"""
@@ -298,11 +401,29 @@ def download(
 
     # FIXME: Cleanup on Exception
     with TemporaryDirectory(prefix="youcube-") as temp_dir:
+        if direct_stream_url and is_video:
+            media_id = live_stream_id_from_url(direct_stream_url)
+            create_data_folder_if_not_present()
+            out = {
+                "action": "media",
+                "id": media_id,
+                "title": direct_stream_url,
+                "like_count": None,
+                "view_count": None,
+                "is_live": True,
+            }
+            return (
+                out,
+                [get_audio_name(media_id)],
+                {"audio_url": direct_stream_url, "media_id": media_id},
+            )
+
         config = load_config()
         cookie_file = config.get("cookie_file")
         js_runtimes = config.get("js_runtimes")
+        format_selector = "bestvideo+bestaudio/best" if is_video else "bestaudio/best"
         yt_dl_options = {
-            "format": "bestaudio/best",
+            "format": format_selector,
             "outtmpl": join(temp_dir, "%(id)s.%(ext)s"),
             "default_search": "auto",
             "restrictfilenames": True,
@@ -354,12 +475,19 @@ def download(
         also, we need to grep all video in the playlist to provide support.
         """
         if data.get("_type") == "playlist":
-            for video in data.get("entries"):
+            entries = data.get("entries") or []
+            for video in entries:
                 playlist_videos.append(video.get("id"))
 
-            playlist_videos.pop(0)
+            if not entries:
+                return (
+                    {"action": "error", "message": "No results found."},
+                    [],
+                    None,
+                )
 
-            data = data["entries"][0]
+            playlist_videos.pop(0)
+            data = entries[0]
 
         """
         If the video is extract from a playlist,
@@ -386,17 +514,35 @@ def download(
             return (
                 out,
                 [get_audio_name(media_id)],
-                {"source_url": audio_url, "media_id": media_id},
+                {"audio_url": audio_url, "media_id": media_id},
             )
 
         media_id = data.get("id")
 
         if data.get("is_live") or data.get("live_status") == "is_live":
             if is_video:
+                audio_url = pick_audio_url(data) or data.get("url") or url
+                if not audio_url:
+                    return (
+                        {
+                            "action": "error",
+                            "message": "Could not resolve livestream audio URL",
+                        },
+                        [],
+                        None,
+                    )
+                out = {
+                    "action": "media",
+                    "id": media_id,
+                    "title": data.get("title"),
+                    "like_count": data.get("like_count"),
+                    "view_count": data.get("view_count"),
+                    "is_live": True,
+                }
                 return (
-                    {"action": "error", "message": "Livestream video is not supported"},
-                    [],
-                    None,
+                    out,
+                    [get_audio_name(media_id)],
+                    {"audio_url": audio_url, "media_id": media_id},
                 )
             audio_url = pick_audio_url(data)
             if not audio_url:
@@ -419,7 +565,7 @@ def download(
             return (
                 out,
                 [get_audio_name(media_id)],
-                {"source_url": audio_url, "media_id": media_id},
+                {"audio_url": audio_url, "media_id": media_id},
             )
 
         create_data_folder_if_not_present()

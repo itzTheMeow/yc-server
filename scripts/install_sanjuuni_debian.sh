@@ -28,6 +28,11 @@ fi
 
 echo "Building sanjuuni..."
 cd "$SANJUUNI_DIR"
+# Fix build break with newer FFmpeg where AVFrame.duration was removed.
+if [ -f "src/sanjuuni.cpp" ] && grep -q "frame->duration" "src/sanjuuni.cpp"; then
+  echo "Patching src/sanjuuni.cpp for FFmpeg AVFrame.duration removal..."
+  sudo sed -i 's/frame->duration/frame->pkt_duration/g' src/sanjuuni.cpp
+fi
 sudo ./configure
 sudo make -j"$(nproc)"
 
