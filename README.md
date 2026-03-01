@@ -13,6 +13,7 @@ This fork has lots of new features and is a lot more stable.
 
 ## Requirements
 
+- Git (for cloning only)
 - FFmpeg / FFmpeg 5.1+
 - Node.js
 - sanjuuni (Optional for video output)
@@ -56,6 +57,7 @@ The server reads optional settings from `config.json` in the project root.
 - `spotify.client_id`: Optional Spotify client ID. If `null` or empty, falls back to env variable `SPOTIPY_CLIENT_ID`.
 - `spotify.client_secret`: Optional Spotify client secret. If `null` or empty, falls back to env variable `SPOTIPY_CLIENT_SECRET`.
 - `spotify.market`: Optional market/region for Spotify lookups. Default is `NL`.
+- `debug_logging_default`: Optional boolean to enable debug logs by default. Default is `false`.
 
 ## Debian: Install Sanjuuni (32vid)
 
