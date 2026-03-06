@@ -6,18 +6,33 @@
     <title>Admin Dashboard</title>
     <style>
         body { font-family: sans-serif; background-color: #282c34; color: #abb2bf; margin: 0; padding: 2rem; }
-        h1 { color: #61afef; }
+        h1 { color: #61afef; display: inline-block; margin-right: 1rem; }
         table { width: 100%; border-collapse: collapse; margin-top: 2rem; }
         th, td { padding: 0.8rem; text-align: left; border-bottom: 1px solid #3b4048; }
         th { background-color: #3b4048; }
         .actions a { color: #e06c75; text-decoration: none; margin-right: 1rem; }
         .header { display: flex; justify-content: space-between; align-items: center; }
         .header a { color: #61afef; text-decoration: none; }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #e06c75; /* Red initially */
+            margin-left: 10px;
+        }
+        .status-indicator.connected {
+            background-color: #98c379; /* Green when connected */
+            box-shadow: 0 0 5px #98c379;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>Admin Dashboard</h1>
+        <div>
+            <h1>Admin Dashboard</h1>
+            <span id="connectionStatus" class="status-indicator" title="Disconnected"></span>
+        </div>
         <div>
             <a href="/admin/kick-all">Kick All</a>
             <a href="/admin/logout" style="margin-left: 1rem;">Logout</a>
@@ -37,7 +52,7 @@
                 <th>Actions</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="clientTableBody">
             {% for client in clients %}
             <tr>
                 <td>{{ client.id }}</td>
@@ -58,5 +73,60 @@
             {% endfor %}
         </tbody>
     </table>
+
+    <script>
+        const tableBody = document.getElementById('clientTableBody');
+        const statusIndicator = document.getElementById('connectionStatus');
+        let ws;
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/admin/ws`);
+
+            ws.onopen = () => {
+                statusIndicator.classList.add('connected');
+                statusIndicator.title = "Live Connected";
+            };
+
+            ws.onmessage = (event) => {
+                const clients = JSON.parse(event.data);
+                renderTable(clients);
+            };
+
+            ws.onclose = () => {
+                statusIndicator.classList.remove('connected');
+                statusIndicator.title = "Disconnected - Reconnecting...";
+                setTimeout(connect, 2000);
+            };
+        }
+
+        function renderTable(clients) {
+            if (clients.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="8" style="text-align: center;">No active clients.</td></tr>';
+                return;
+            }
+
+            let html = '';
+            clients.forEach(client => {
+                html += `
+                    <tr>
+                        <td>${client.id}</td>
+                        <td>${client.ip}</td>
+                        <td>${client.mode}</td>
+                        <td>${client.media_id}</td>
+                        <td>${client.title || '-'}</td>
+                        <td>${client.url || '-'}</td>
+                        <td>${client.duration}</td>
+                        <td class="actions">
+                            <a href="/admin/kick/${client.id}">Kick</a>
+                        </td>
+                    </tr>
+                `;
+            });
+            tableBody.innerHTML = html;
+        }
+
+        connect();
+    </script>
 </body>
 </html>

@@ -11,9 +11,10 @@ from functools import wraps
 from os import getenv
 from time import monotonic
 from typing import Optional
+import json
 
-from sanic import Blueprint, Request, response
-from sanic.exceptions import Unauthorized
+from sanic import Blueprint, Request, response, Websocket
+from sanic.exceptions import WebsocketClosed
 from sanic_ext import render
 
 from yc_utils import load_config
@@ -33,10 +34,34 @@ def login_required(wrapped):
         @wraps(f)
         async def decorated_function(request: Request, *args, **kwargs):
             if not check_auth(request):
+                if request.path.endswith("/ws"): # For websockets, just close
+                    return
                 return response.redirect("/admin/login")
             return await f(request, *args, **kwargs)
         return decorated_function
     return decorator(wrapped)
+
+def get_formatted_clients(client_state) -> list:
+    """Helper to format the client state dictionary into a list."""
+    clients = []
+    if client_state:
+        for client_id, state in client_state.items():
+            listening_since = state.get("listening_since")
+            duration = "-"
+            if isinstance(listening_since, (int, float)):
+                duration = f"{int(monotonic() - listening_since)}s"
+            
+            clients.append({
+                "id": client_id,
+                "ip": state.get("ip", "-"),
+                "mode": state.get("mode", "unknown"),
+                "media_id": state.get("media_id", "-"),
+                "title": state.get("title", "-"),
+                "url": state.get("url", "-"),
+                "duration": duration,
+                "is_live": state.get("is_live", False)
+            })
+    return clients
 
 @admin_bp.route("/login", methods=["GET", "POST"])
 async def login(request: Request):
@@ -83,27 +108,21 @@ async def logout(request: Request):
 async def dashboard(request: Request):
     """Renders the admin dashboard."""
     client_state = request.app.shared_ctx.client_state
-    clients = []
-    
-    if client_state:
-        for client_id, state in client_state.items():
-            listening_since = state.get("listening_since")
-            duration = "-"
-            if isinstance(listening_since, (int, float)):
-                duration = f"{int(monotonic() - listening_since)}s"
-                
-            clients.append({
-                "id": client_id,
-                "ip": state.get("ip", "-"),
-                "mode": state.get("mode", "unknown"),
-                "media_id": state.get("media_id", "-"),
-                "title": state.get("title", "-"),
-                "url": state.get("url", "-"),
-                "duration": duration,
-                "is_live": state.get("is_live", False)
-            })
-            
+    clients = get_formatted_clients(client_state)
     return await render("dashboard.html", context={"clients": clients})
+
+@admin_bp.websocket("/ws")
+@login_required
+async def admin_feed(request: Request, ws: Websocket):
+    """Provides a live feed of client status to the admin dashboard."""
+    try:
+        while True:
+            client_state = request.app.shared_ctx.client_state
+            clients = get_formatted_clients(client_state)
+            await ws.send(json.dumps(clients))
+            await sleep(2)
+    except WebsocketClosed:
+        pass
 
 @admin_bp.route("/kick/<client_id>")
 @login_required
