@@ -11,7 +11,7 @@ from asyncio import get_event_loop, run_coroutine_threadsafe, sleep as async_sle
 from base64 import b64encode
 from datetime import datetime
 from multiprocessing import Manager
-from os import getenv, remove, system
+from os import getenv, remove, system, kill, getpid
 from os.path import exists, getsize, join, dirname, abspath
 from shutil import which
 from subprocess import DEVNULL, Popen
@@ -20,6 +20,7 @@ import logging
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any, List, Optional, Tuple, Type, Union
+from signal import SIGINT
 
 # Suppress the specific deprecation warning from sanic
 # We use .* to match the [DEPRECATION v...] prefix
@@ -677,6 +678,8 @@ admin_config = config.get("admin_panel_web", {})
 if admin_config.get("enabled", False):
     Extend(app, config={"templating": {"path_to_templates": join(dirname(abspath(__file__)), 'web')}})
     app.blueprint(admin_bp)
+else:
+    pass
 
 
 def ensure_live_stream_ctx(app: Sanic) -> Tuple[dict, Lock]:
@@ -859,6 +862,46 @@ def debug_watcher(app: Sanic) -> None:
         for handler in logger.handlers:
             handler.setLevel(level)
 
+def command_help(app: Sanic) -> None:
+    """Prints the help banner."""
+    if NO_COLOR:
+        border = "=" * 40
+        title = "Available Commands"
+    else:
+        border = f"{Foreground.BRIGHT_BLUE}{'=' * 40}{RESET}"
+        title = f"{Foreground.BRIGHT_CYAN}Available Commands{RESET}"
+
+    logger.info(border)
+    logger.info(f" {title}")
+    logger.info(border)
+
+    cmds = [
+        ("status", "Show server status"),
+        ("list-all", "List connected clients"),
+        ("kick-all", "Kick all clients"),
+        ("kick <id>", "Kick a specific client"),
+        ("debug [on|off]", "Toggle debug logging"),
+        ("clear", "Clear console"),
+        ("stop", "Stop the server"),
+        ("help", "Show this message"),
+    ]
+
+    for cmd, desc in cmds:
+        if NO_COLOR:
+            logger.info(f" {cmd:<15} : {desc}")
+        else:
+            logger.info(f" {Foreground.BRIGHT_YELLOW}{cmd:<15}{RESET} : {desc}")
+
+    logger.info(border)
+
+def command_stop(app: Sanic) -> None:
+    """Stops the server."""
+    logger.info("Stopping server...")
+    kill(getpid(), SIGINT)
+
+def command_clear(app: Sanic) -> None:
+    """Clears the console."""
+    system("cls" if sys.platform.startswith("win") else "clear")
 
 def command_listener(app: Sanic) -> None:
     commands = {
@@ -867,11 +910,13 @@ def command_listener(app: Sanic) -> None:
         "kickall": command_kick_all,
         "list-all": command_list_all,
         "listall": command_list_all,
-        "clear": None,
-        "cls": None,
-        "help": None,
+        "stop": command_stop,
+        "exit": command_stop,
+        "help": command_help,
+        "clear": command_clear,
+        "cls": command_clear,
     }
-    # logger.info("Command listener ready: status, kick-all, kick, list-all, clear, debug, help")
+    
     while True:
         try:
             line = sys.stdin.readline()
@@ -882,14 +927,7 @@ def command_listener(app: Sanic) -> None:
         cmd = line.strip().lower()
         if not cmd:
             continue
-        if cmd == "help":
-            logger.info(
-                "Commands: status, kick-all, kick <id>, list-all, clear, debug, help"
-            )
-            continue
-        if cmd in ("clear", "cls"):
-            system("cls" if sys.platform.startswith("win") else "clear")
-            continue
+
         if cmd.startswith("kick "):
             parts = cmd.split()
             if len(parts) != 2:
