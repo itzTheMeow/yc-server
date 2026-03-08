@@ -73,7 +73,7 @@ from yc_utils import (
     VIDEO_FORMAT,
 )
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 # one dfpwm chunk is 16 bits
 CHUNK_SIZE = 16
@@ -114,42 +114,6 @@ playAudio
 This accepts a list of audio samples as amplitudes between -128 and 127.
 These are stored in an internal buffer and played back at 48kHz.
 If this buffer is full, this function will return false.
-"""
-
-"""Related CC-Tweaked issues
-Streaming HTTP response https://github.com/cc-tweaked/CC-Tweaked/issues/1181
-Speaker Networks        https://github.com/cc-tweaked/CC-Tweaked/issues/1488
-Pocket computers do not have many usecases without network access
-https://github.com/cc-tweaked/CC-Tweaked/issues/1406
-Speaker limit to 8      https://github.com/cc-tweaked/CC-Tweaked/issues/1313
-Some way to notify player through pocket computer with modem
-https://github.com/cc-tweaked/CC-Tweaked/issues/1148
-Memory limits for computers https://github.com/cc-tweaked/CC-Tweaked/issues/1580
-"""
-
-"""TODO: Add those:
-AudioDevices:
- - Speaker Note (Sound)  https://tweaked.cc/peripheral/speaker.html
- - Notblock              https://www.youtube.com/watch?v=XY5UvTxD9dA
- - Create Steam whistles https://www.youtube.com/watch?v=dgZ4F7U19do
-                         https://github.com/danielathome19/MIDIToComputerCraft/tree/master
-
-Video Formats:
- - 32vid binary https://github.com/MCJack123/sanjuuni
- - qtv          https://github.com/Axisok/qtccv
-
-Audio Formats:
- - DFPWM ffmpeg fallback ? https://github.com/asiekierka/pixmess/blob/master/scraps/aucmp.py
- - PCM
- - NBS  https://github.com/Xella37/NBS-Tunes-CC
- - MIDI https://github.com/OpenPrograms/Sangar-Programs/blob/master/midi.lua
- - XM   https://github.com/MCJack123/tracc
-
-Audio u. Video preview / thumbnail:
- - NFP  https://tweaked.cc/library/cc.image.nft.html
- - bimg https://github.com/SkyTheCodeMaster/bimg
- - as 1 qtv frame
- - as 1 32vid frame
 """
 
 logger = setup_logging()
@@ -450,6 +414,10 @@ class Actions:
         if error := assert_resp("url", url, str):
             return error
         url = url.strip()
+        
+        client_id = f"{id(resp):x}"
+        client_state = get_shared_client_state(request.app)
+        
         # TODO: assert_resp width and height
         out, files, live_info = await run_function_in_thread_from_async_function(
             download,
@@ -459,16 +427,16 @@ class Actions:
             message.get("width"),
             message.get("height"),
             spotify_url_processor,
+            client_id,
+            client_state
         )
         if live_info:
             live_streams, live_streams_lock = ensure_live_stream_ctx(request.app)
-            client_state = get_shared_client_state(request.app)
             base_media_id = live_info.get("media_id")
             media_id = f"{base_media_id}-{id(resp):x}"
             out["id"] = media_id
             live_info["media_id"] = media_id
             if client_state is not None:
-                client_id = f"{id(resp):x}"
                 state = client_state.get(client_id) or {}
                 state.update(
                     {
@@ -477,7 +445,8 @@ class Actions:
                         "title": out.get("title"),
                         "is_live": True,
                         "url": url,
-                        "listening_since": monotonic(),
+                        "listening_since": None, # Wait for first chunk
+                        "status": "Buffering"
                     }
                 )
                 client_state[client_id] = state
@@ -499,12 +468,11 @@ class Actions:
 
         for file in files:
             request.app.shared_ctx.data[file] = datetime.now()
-        client_state = get_shared_client_state(request.app)
+        
         has_video_file = any(
             file.lower().endswith(f".{VIDEO_FORMAT}") for file in files
         )
         if client_state is not None:
-            client_id = f"{id(resp):x}"
             state = client_state.get(client_id) or {}
             state.update(
                 {
@@ -514,6 +482,7 @@ class Actions:
                     "is_live": False,
                     "url": url,
                     "listening_since": monotonic(),
+                    "status": "Playing"
                 }
             )
             client_state[client_id] = state
@@ -572,6 +541,21 @@ class Actions:
             else:
                 request.app.shared_ctx.data[file_name] = datetime.now()
                 chunk = await getchunk(file, chunkindex)
+            
+            # Update status to Playing/Streaming on second chunk (index 1)
+            if chunkindex == 1:
+                client_id = f"{id(ws):x}"
+                client_state = get_shared_client_state(request.app)
+                if client_state:
+                    state = client_state.get(client_id) or {}
+                    # Only update if we haven't started playing yet
+                    if state.get("listening_since") is None:
+                        new_status = "Streaming" if state.get("is_live") else "Playing"
+                        state.update({
+                            "status": new_status,
+                            "listening_since": monotonic()
+                        })
+                        client_state[client_id] = state
 
             return {"action": "chunk", "chunk": b64encode(chunk).decode("ascii")}
         logger.warning("User tried to use special Characters")
@@ -1230,6 +1214,8 @@ async def wshandler(request: Request, ws: Websocket):
             "is_live": False,
             "ip": request.client_ip,
             "listening_since": None,
+            "connected_since": monotonic(),
+            "status": "Idle"
         }
 
     try:

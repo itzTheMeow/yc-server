@@ -66,6 +66,15 @@ DIRECT_AUDIO_EXTENSIONS = (
 LIVE_VIDEO_BUFFER_SECONDS = int(getenv("LIVE_VIDEO_BUFFER_SECONDS", "30"))
 
 
+def update_client_status(client_state, client_id, status, **kwargs):
+    """Updates the client state with a new status and optional extra fields."""
+    if client_state is not None and client_id:
+        state = client_state.get(client_id) or {}
+        state["status"] = status
+        state.update(kwargs)
+        client_state[client_id] = state
+
+
 def is_direct_audio_stream_url(url: str) -> bool:
     """Returns True if the URL points to a direct audio stream."""
     parsed = urlparse(url)
@@ -152,11 +161,13 @@ def pick_audio_url(info: dict) -> Optional[str]:
 
 
 def download_video(
-        temp_dir: str, media_id: str, resp: Websocket, loop, width: int, height: int
+        temp_dir: str, media_id: str, resp: Websocket, loop, width: int, height: int,
+        client_id: str = None, client_state = None
 ):
     """
     Converts the downloaded video to 32vid
     """
+    update_client_status(client_state, client_id, "Converting video...")
     run_coroutine_threadsafe(
         resp.send(
             dumps({"action": "status", "message": "Converting video to 32vid ..."})
@@ -198,10 +209,11 @@ def download_video(
         )
 
 
-def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
+def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop, client_id: str = None, client_state = None):
     """
     Converts the downloaded audio to dfpwm
     """
+    update_client_status(client_state, client_id, "Converting audio...")
     run_coroutine_threadsafe(
         resp.send(
             dumps({"action": "status", "message": "Converting audio to dfpwm ..."})
@@ -328,10 +340,13 @@ def download(
         width: int,
         height: int,
         spotify_url_processor: SpotifyURLProcessor,
+        client_id: str = None,
+        client_state = None,
 ) -> Tuple[Dict[str, Any], list, Optional[Dict]]:
     """
     Downloads and converts the media from the give URL
     """
+    update_client_status(client_state, client_id, "Resolving URL...", url=url)
 
     is_video = width is not None and height is not None
 
@@ -344,12 +359,14 @@ def download(
         is_video = False
         width = None
         height = None
+        update_client_status(client_state, client_id, "Direct Stream", title=url)
         return build_direct_audio_response(url)
 
     def my_hook(info):
         """https://github.com/yt-dlp/yt-dlp#adding-logger-and-progress-hook"""
         status = info.get("status")
         if status in ("waiting", "paused"):
+            update_client_status(client_state, client_id, "Waiting on YouTube...")
             run_coroutine_threadsafe(
                 resp.send(
                     dumps(
@@ -367,6 +384,7 @@ def download(
             percent = info.get("_percent_str")
             eta = info.get("_eta_str")
             if not percent or not eta:
+                update_client_status(client_state, client_id, "Downloading...")
                 run_coroutine_threadsafe(
                     resp.send(
                         dumps(
@@ -380,6 +398,7 @@ def download(
                 )
                 return
 
+            update_client_status(client_state, client_id, f"Downloading {remove_whitespace(percent)}")
             run_coroutine_threadsafe(
                 resp.send(
                     dumps(
@@ -453,6 +472,7 @@ def download(
                 is_video = False
                 width = None
                 height = None
+                update_client_status(client_state, client_id, "Direct Stream", title=url)
                 return build_direct_audio_response(url)
             return (
                 {"action": "error", "message": str(e)},
@@ -500,6 +520,15 @@ def download(
                     [],
                     None,
                 )
+        
+        # Update metadata as soon as we have it
+        update_client_status(
+            client_state, 
+            client_id, 
+            "Processing...", 
+            title=data.get("title") or url,
+            media_id=data.get("id")
+        )
 
         if not is_video and is_direct_audio_stream_info(data):
             audio_url = pick_audio_url(data) or url
@@ -627,10 +656,10 @@ def download(
         # TODO: Thread audio & video download
 
         if not audio_downloaded:
-            download_audio(temp_dir, media_id, resp, loop)
+            download_audio(temp_dir, media_id, resp, loop, client_id, client_state)
 
         if not video_downloaded and is_video:
-            download_video(temp_dir, media_id, resp, loop, width, height)
+            download_video(temp_dir, media_id, resp, loop, width, height, client_id, client_state)
 
     out = {
         "action": "media",

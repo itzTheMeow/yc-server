@@ -41,24 +41,48 @@ def login_required(wrapped):
         return decorated_function
     return decorator(wrapped)
 
+def format_duration(seconds: float) -> str:
+    """Formats seconds into a readable string (e.g., 1h 2m 3s)."""
+    if not seconds:
+        return "-"
+    seconds = int(seconds)
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h}h {m}m {s}s"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
 def get_formatted_clients(client_state) -> list:
     """Helper to format the client state dictionary into a list."""
     clients = []
     if client_state:
+        now = monotonic()
         for client_id, state in client_state.items():
+            # Play Duration
             listening_since = state.get("listening_since")
-            duration = "-"
+            play_duration = "-"
             if isinstance(listening_since, (int, float)):
-                duration = f"{int(monotonic() - listening_since)}s"
+                play_duration = format_duration(now - listening_since)
             
+            # Connection Duration
+            connected_since = state.get("connected_since")
+            conn_duration = "-"
+            if isinstance(connected_since, (int, float)):
+                conn_duration = format_duration(now - connected_since)
+
             clients.append({
                 "id": client_id,
                 "ip": state.get("ip", "-"),
                 "mode": state.get("mode", "unknown"),
+                "status": state.get("status", "Idle"),
                 "media_id": state.get("media_id", "-"),
                 "title": state.get("title", "-"),
-                "url": state.get("url", "-"),
-                "duration": duration,
+                "url": state.get("url", ""),
+                "play_duration": play_duration,
+                "conn_duration": conn_duration,
                 "is_live": state.get("is_live", False)
             })
     return clients
