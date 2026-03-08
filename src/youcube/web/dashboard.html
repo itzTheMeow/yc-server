@@ -13,6 +13,7 @@
         .actions a { color: #e06c75; text-decoration: none; margin-right: 1rem; }
         .source-link { color: #98c379; text-decoration: none; margin-right: 1rem; }
         .header { display: flex; justify-content: space-between; align-items: center; }
+        .header-left { display: flex; align-items: center; }
         .header a { color: #61afef; text-decoration: none; }
         .status-indicator {
             display: inline-block;
@@ -26,13 +27,31 @@
             background-color: #98c379; /* Green when connected */
             box-shadow: 0 0 5px #98c379;
         }
+        .version-info {
+            margin-left: 1rem;
+            font-size: 0.9rem;
+            color: #5c6370;
+        }
+        .update-badge {
+            background-color: #e06c75;
+            color: #282c34;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin-left: 0.5rem;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <div>
+        <div class="header-left">
             <h1>Admin Dashboard</h1>
             <span id="connectionStatus" class="status-indicator" title="Disconnected"></span>
+            <span class="version-info">v{{ current_version }}</span>
+            {% if latest_version and latest_version != current_version %}
+                <span class="update-badge" title="Latest: v{{ latest_version }}">Update Available (v{{ latest_version }})</span>
+            {% endif %}
         </div>
         <div>
             <a href="/admin/kick-all">Kick All</a>

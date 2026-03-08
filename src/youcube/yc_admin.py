@@ -5,24 +5,26 @@
 Admin Panel for YC-Server-Fork
 """
 
-from asyncio import sleep
+from asyncio import sleep, get_event_loop
 from datetime import datetime
 from functools import wraps
 from os import getenv
 from time import monotonic
 from typing import Optional
 import json
+import urllib.request
 
 from sanic import Blueprint, Request, response, Websocket
 from sanic.exceptions import WebsocketClosed
 from sanic_ext import render
 
-from yc_utils import load_config
+from yc_utils import load_config, VERSION
 
 admin_bp = Blueprint("admin", url_prefix="/admin")
 
 AUTH_COOKIE_NAME = "ycf_admin_auth"
 AUTH_COOKIE_VALUE = "authenticated"
+VERSION_URL = "https://raw.githubusercontent.com/YC-Fork/YC-Server-Fork/main/versions.json"
 
 def check_auth(request: Request) -> bool:
     """Checks if the user is authenticated via cookie."""
@@ -87,6 +89,15 @@ def get_formatted_clients(client_state) -> list:
             })
     return clients
 
+def fetch_latest_version():
+    """Fetches the latest version from GitHub."""
+    try:
+        with urllib.request.urlopen(VERSION_URL, timeout=5) as url:
+            data = json.loads(url.read().decode())
+            return data.get("latest")
+    except Exception:
+        return None
+
 @admin_bp.route("/login", methods=["GET", "POST"])
 async def login(request: Request):
     """Handles admin login."""
@@ -133,7 +144,15 @@ async def dashboard(request: Request):
     """Renders the admin dashboard."""
     client_state = request.app.shared_ctx.client_state
     clients = get_formatted_clients(client_state)
-    return await render("dashboard.html", context={"clients": clients})
+    
+    loop = get_event_loop()
+    latest_version = await loop.run_in_executor(None, fetch_latest_version)
+    
+    return await render("dashboard.html", context={
+        "clients": clients,
+        "current_version": VERSION,
+        "latest_version": latest_version
+    })
 
 @admin_bp.websocket("/ws")
 @login_required

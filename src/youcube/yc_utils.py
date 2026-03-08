@@ -15,6 +15,7 @@ from re import RegexFlag
 from re import compile as re_compile
 from typing import Tuple
 
+VERSION = "0.1.2"
 
 def remove_whitespace(string: str) -> str:
     """

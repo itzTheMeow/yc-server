@@ -71,9 +71,8 @@ from yc_utils import (
     is_save,
     load_config,
     VIDEO_FORMAT,
+    VERSION,
 )
-
-VERSION = "0.1.2"
 
 # one dfpwm chunk is 16 bits
 CHUNK_SIZE = 16
