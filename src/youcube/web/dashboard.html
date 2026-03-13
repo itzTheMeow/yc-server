@@ -41,6 +41,20 @@
             margin-left: 0.5rem;
             font-weight: bold;
         }
+        progress {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 80px;
+            height: 10px;
+        }
+        progress::-webkit-progress-bar {
+            background-color: #3b4048;
+            border-radius: 5px;
+        }
+        progress::-webkit-progress-value {
+            background-color: #61afef;
+            border-radius: 5px;
+        }
     </style>
 </head>
 <body>
@@ -138,11 +152,25 @@
                     sourceLink = `<a href="${client.url}" target="_blank" class="source-link">Source</a>`;
                 }
 
+                let statusHtml = client.status;
+                if (client.status && client.status.startsWith("Downloading")) {
+                    const match = client.status.match(/(\d+(\.\d+)?)%/);
+                    if (match) {
+                        const percent = match[1];
+                        statusHtml = `
+                            <div style="display: flex; align-items: center;">
+                                <progress value="${percent}" max="100" style="margin-right: 5px;"></progress>
+                                <span>${percent}%</span>
+                            </div>
+                        `;
+                    }
+                }
+
                 html += `
                     <tr>
                         <td>${client.id}</td>
                         <td>${client.ip}</td>
-                        <td>${client.status}</td>
+                        <td>${statusHtml}</td>
                         <td>${client.mode}</td>
                         <td>${client.media_id}</td>
                         <td>${client.title || '-'}</td>

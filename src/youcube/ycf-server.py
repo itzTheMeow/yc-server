@@ -51,7 +51,7 @@ from sanic import Request, Sanic, Websocket
 from sanic.compat import open_async
 from sanic.exceptions import SanicException
 from sanic.handlers import ErrorHandler
-from sanic.response import raw, text
+from sanic.response import raw, text, file
 from sanic_ext import Extend
 from spotipy import MemoryCacheHandler, SpotifyClientCredentials
 from spotipy.client import Spotify
@@ -636,13 +636,13 @@ class CustomErrorHandler(ErrorHandler):
 
     def default(self, request: Request, exception: Union[SanicException, Exception]):
         """handles errors that have no error handlers assigned"""
-
         if isinstance(exception, SanicException) and exception.status_code == 426:
-            # TODO: Respond with nice html that tells the user how to install YC
-            return text(
-                "Your YC-Server-Fork is running correctly. Now all you need is the YC-Server-Client on your CC-Tweaked computer. "
-                "See https://github.com/YC-Fork/YC-Client-Fork. "
-            )
+            try:
+                with open(join(dirname(abspath(__file__)), 'web', 'index.html'), "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                return text(html_content, content_type="text/html")
+            except FileNotFoundError:
+                return text("Server is running, but the index page is missing.", status=500)
 
         return super().default(request, exception)
 
@@ -873,7 +873,7 @@ def command_help(app: Sanic) -> None:
         if NO_COLOR:
             logger.info(f" {cmd:<15} : {desc}")
         else:
-            logger.info(f" {Foreground.BRIGHT_YELLOW}{cmd:<15}{RESET} : {desc}")
+            logger.info(f" {name:<15} : {color}{status}{RESET}")
 
     logger.info(border)
 
@@ -1124,6 +1124,13 @@ async def before_start(app: Sanic):
     Thread(target=kick_watcher, args=(app,), daemon=True).start()
     Thread(target=kick_target_watcher, args=(app,), daemon=True).start()
     Thread(target=debug_watcher, args=(app,), daemon=True).start()
+
+
+@app.route("/installer.lua", methods=["GET"])
+async def serve_installer_script(_request: Request):
+    """Serves the Lua installer script."""
+    installer_path = join(dirname(abspath(__file__)), 'web', 'installer.lua')
+    return await file(installer_path, mime_type="text/plain") # text/plain for Lua script
 
 
 @app.route("/dfpwm/<media_id:str>/<chunkindex:int>")

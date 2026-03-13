@@ -46,7 +46,7 @@ class SpotifyURLProcessor:
         return f"{artists} - {name}"
 
     def spotify_playlist(self, spotify_id: str) -> list:
-        playlist_tracks = self.spotify.playlist_items(spotify_id)
+        playlist_tracks = self.spotify.playlist_items(spotify_id, market=self.spotify_market)
         playlist = []
         for item in playlist_tracks["items"]:
             track = item.get("track")

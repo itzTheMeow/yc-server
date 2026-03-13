@@ -427,7 +427,8 @@ def download(
                 )
                 return
 
-            update_client_status(client_state, client_id, f"Downloading {remove_whitespace(percent)}")
+            clean_status = remove_ansi_escape_codes(f"Downloading {remove_whitespace(percent)}")
+            update_client_status(client_state, client_id, clean_status)
             run_coroutine_threadsafe(
                 resp.send(
                     dumps(
@@ -456,9 +457,11 @@ def download(
             "extract_flat": "in_playlist",
             "progress_hooks": [my_hook],
             "logger": YTDLPLogger(),
+            "force_ipv4": True,
+            "concurrent_fragment_downloads": 8,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["web"]
+                    "player_client": ["ios", "web"]
                 }
             }
         }
