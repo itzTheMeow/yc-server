@@ -8,10 +8,10 @@ Download Functionality of YC
 # Built-in modules
 from asyncio import run_coroutine_threadsafe
 from hashlib import sha1
-from os import getenv, listdir
+from os import getenv, listdir, remove
 from os.path import abspath, dirname, join
 from tempfile import TemporaryDirectory
-from time import time
+from time import time, sleep
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -64,6 +64,35 @@ DIRECT_AUDIO_EXTENSIONS = (
     ".wav",
 )
 LIVE_VIDEO_BUFFER_SECONDS = int(getenv("LIVE_VIDEO_BUFFER_SECONDS", "30"))
+
+
+class LockFile:
+    def __init__(self, path: str, timeout: int = 600):
+        self.lock_path = path + ".lock"
+        self.timeout = timeout
+
+    def __enter__(self):
+        start = time()
+        while True:
+            try:
+                # Exclusive creation to act as a lock
+                with open(self.lock_path, 'x'):
+                    pass
+                return
+            except FileExistsError:
+                if time() - start > self.timeout:
+                    try:
+                        remove(self.lock_path)
+                    except FileNotFoundError:
+                        pass
+                    continue
+                sleep(0.1)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            remove(self.lock_path)
+        except FileNotFoundError:
+            pass
 
 
 def update_client_status(client_state, client_id, status, **kwargs):
@@ -601,65 +630,66 @@ def download(
 
         create_data_folder_if_not_present()
 
-        audio_downloaded = is_audio_already_downloaded(media_id)
-        video_downloaded = (
-            is_video_already_downloaded(media_id, width, height) if is_video else True
-        )
-
-        if not audio_downloaded or (not video_downloaded and is_video):
-            run_coroutine_threadsafe(
-                resp.send(
-                    dumps({"action": "status", "message": "Downloading resource ..."})
-                ),
-                loop,
+        with LockFile(join(DATA_FOLDER, media_id)):
+            audio_downloaded = is_audio_already_downloaded(media_id)
+            video_downloaded = (
+                is_video_already_downloaded(media_id, width, height) if is_video else True
             )
 
-            try:
-                yt_dl.process_ie_result(data, download=True)
-            except DownloadError as e:
-                if is_video and is_format_unavailable_error(e):
-                    # Decide fallback based on actual download failure instead of
-                    # incomplete pre-extraction metadata.
-                    is_video = False
-                    width = None
-                    height = None
-                    yt_dl.params["format"] = "bestaudio/best"
-                    run_coroutine_threadsafe(
-                        resp.send(
-                            dumps(
-                                {
-                                    "action": "status",
-                                    "message": "Video not available, falling back to audio.",
-                                }
-                            )
-                        ),
-                        loop,
-                    )
-                    audio_downloaded = is_audio_already_downloaded(media_id)
-                    video_downloaded = True
-                    if not audio_downloaded:
-                        try:
-                            yt_dl.process_ie_result(data, download=True)
-                        except DownloadError as retry_error:
-                            return (
-                                {"action": "error", "message": str(retry_error)},
-                                [],
-                                None,
-                            )
-                else:
-                    return (
-                        {"action": "error", "message": str(e)},
-                        [],
-                        None,
-                    )
+            if not audio_downloaded or (not video_downloaded and is_video):
+                run_coroutine_threadsafe(
+                    resp.send(
+                        dumps({"action": "status", "message": "Downloading resource ..."})
+                    ),
+                    loop,
+                )
 
-        # TODO: Thread audio & video download
+                try:
+                    yt_dl.process_ie_result(data, download=True)
+                except DownloadError as e:
+                    if is_video and is_format_unavailable_error(e):
+                        # Decide fallback based on actual download failure instead of
+                        # incomplete pre-extraction metadata.
+                        is_video = False
+                        width = None
+                        height = None
+                        yt_dl.params["format"] = "bestaudio/best"
+                        run_coroutine_threadsafe(
+                            resp.send(
+                                dumps(
+                                    {
+                                        "action": "status",
+                                        "message": "Video not available, falling back to audio.",
+                                    }
+                                )
+                            ),
+                            loop,
+                        )
+                        audio_downloaded = is_audio_already_downloaded(media_id)
+                        video_downloaded = True
+                        if not audio_downloaded:
+                            try:
+                                yt_dl.process_ie_result(data, download=True)
+                            except DownloadError as retry_error:
+                                return (
+                                    {"action": "error", "message": str(retry_error)},
+                                    [],
+                                    None,
+                                )
+                    else:
+                        return (
+                            {"action": "error", "message": str(e)},
+                            [],
+                            None,
+                        )
 
-        if not audio_downloaded:
-            download_audio(temp_dir, media_id, resp, loop, client_id, client_state)
+            # TODO: Thread audio & video download
 
-        if not video_downloaded and is_video:
-            download_video(temp_dir, media_id, resp, loop, width, height, client_id, client_state)
+            if not audio_downloaded:
+                download_audio(temp_dir, media_id, resp, loop, client_id, client_state)
+
+            if not video_downloaded and is_video:
+                download_video(temp_dir, media_id, resp, loop, width, height, client_id, client_state)
 
     out = {
         "action": "media",
