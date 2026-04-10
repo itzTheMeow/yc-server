@@ -459,11 +459,11 @@ def download(
             "logger": YTDLPLogger(),
             "force_ipv4": True,
             "concurrent_fragment_downloads": 8,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["ios", "web"]
-                }
-            }
+            #"extractor_args": {
+            #    "youtube": {
+            #       "player_client": ["ios", "web"]
+            #    }
+            #}
         }
         if cookie_file:
             yt_dl_options["cookiefile"] = cookie_file
