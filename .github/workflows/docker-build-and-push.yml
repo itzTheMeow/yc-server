@@ -40,5 +40,5 @@ jobs:
               with:
                   context: src
                   push: true
-                  tags: ${{ env.REGISTRY }}/itzTheMeow/yc-server:latest
+                  tags: ${{ env.REGISTRY }}/itzthemeow/yc-server:latest
                   labels: ${{ steps.meta.outputs.labels }}
