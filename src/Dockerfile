@@ -49,7 +49,7 @@ RUN set -eux; \
   # CVE-2024-5535 TODO: remove when base image is updated
   openssl \
   # pypy requirements
-  libffi libbz2 \
+  libffi libbz2 deno \
   # sanjuuni requirements
   poco \
   # ffmpeg requirements
