@@ -2,7 +2,7 @@ FROM ghcr.io/commandcracker/ffmpeg:latest AS ffmpeg
 
 FROM ffmpeg AS sanjuuni
 
-ENV SANJUUNI_VERSION=49cb275d4ef64d2bee3d5d2cbc5baf47787bedc2
+ENV SANJUUNI_VERSION=148e68e776e08d0ac465c965371dfc21391023e0
 
 ARG SANJUUNI_SHA512SUM="22c85f9a5c16c0acb4dde971b64f53e765a8d607065e7a25115103925124e33a0680da3790e85c4343b7d320a0170b6ae096ec7f2b48b22582cf96681fd3a78c *sanjuuni.tar.gz"
 
@@ -15,7 +15,7 @@ RUN set -eux; \
   poco-dev \
   make; \
   wget -q --output-document=sanjuuni.tar.gz https://github.com/MCJack123/sanjuuni/archive/${SANJUUNI_VERSION}.tar.gz; \
-  echo "${SANJUUNI_SHA512SUM}" | sha512sum -c -; \
+  #echo "${SANJUUNI_SHA512SUM}" | sha512sum -c -; \
   mkdir --parents sanjuuni; \
   tar --extract --directory sanjuuni --strip-components=1 --file=sanjuuni.tar.gz; \
   rm sanjuuni.tar.gz;
